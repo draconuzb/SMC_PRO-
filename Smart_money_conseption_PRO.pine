@@ -1,0 +1,354 @@
+//@version=5
+indicator("🔥 SMC Professional Algorithm - Smart Money Concepts", shorttitle="SMC Pro", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// ═══════════════════════════════════════════════════════════════
+// 📊 PARAMETRLAR VA SOZLAMALAR
+// ═══════════════════════════════════════════════════════════════
+
+// Market Structure parametrlari
+swingLength = input.int(5, "Swing Length", minval=3, maxval=20, group="Market Structure")
+bosLength = input.int(10, "BOS Confirmation Length", minval=5, maxval=50, group="Market Structure")
+
+// Order Block sozlamalari
+obExtend = input.int(20, "Order Block Extension", minval=5, maxval=100, group="Order Blocks")
+showOB = input.bool(true, "Show Order Blocks", group="Order Blocks")
+bullishOBColor = input.color(color.new(color.green, 80), "Bullish OB Color", group="Order Blocks")
+bearishOBColor = input.color(color.new(color.red, 80), "Bearish OB Color", group="Order Blocks")
+
+// Fair Value Gap sozlamalari
+showFVG = input.bool(true, "Show Fair Value Gaps", group="Fair Value Gap")
+fvgBullColor = input.color(color.new(color.blue, 85), "Bullish FVG Color", group="Fair Value Gap")
+fvgBearColor = input.color(color.new(color.orange, 85), "Bearish FVG Color", group="Fair Value Gap")
+
+// Liquidity sozlamalari
+showLiquidity = input.bool(true, "Show Liquidity Grabs", group="Liquidity")
+liquidityLength = input.int(20, "Liquidity Lookback", minval=10, maxval=100, group="Liquidity")
+
+// Signal sozlamalari
+showSignals = input.bool(true, "Show Entry Signals", group="Signals")
+riskReward = input.float(2.0, "Risk:Reward Ratio", minval=1.0, maxval=5.0, step=0.1, group="Signals")
+
+// ═══════════════════════════════════════════════════════════════
+// 🔍 SWING HIGH/LOW VA MARKET STRUCTURE
+// ═══════════════════════════════════════════════════════════════
+
+// Swing High/Low aniqlash
+isSwingHigh = ta.pivothigh(high, swingLength, swingLength)
+isSwingLow = ta.pivotlow(low, swingLength, swingLength)
+
+// Swing nuqtalarni saqlash
+var float[] swingHighs = array.new<float>()
+var float[] swingLows = array.new<float>()
+var int[] swingHighBars = array.new<int>()
+var int[] swingLowBars = array.new<int>()
+
+if not na(isSwingHigh)
+    array.push(swingHighs, isSwingHigh)
+    array.push(swingHighBars, bar_index - swingLength)
+    if array.size(swingHighs) > 5
+        array.shift(swingHighs)
+        array.shift(swingHighBars)
+
+if not na(isSwingLow)
+    array.push(swingLows, isSwingLow)
+    array.push(swingLowBars, bar_index - swingLength)
+    if array.size(swingLows) > 5
+        array.shift(swingLows)
+        array.shift(swingLowBars)
+
+// Market Structure aniqlash
+getMarketStructure() =>
+    structure = "RANGING"
+    if array.size(swingHighs) >= 2 and array.size(swingLows) >= 2
+        lastHigh = array.get(swingHighs, array.size(swingHighs) - 1)
+        prevHigh = array.get(swingHighs, array.size(swingHighs) - 2)
+        lastLow = array.get(swingLows, array.size(swingLows) - 1)
+        prevLow = array.get(swingLows, array.size(swingLows) - 2)
+        
+        if lastHigh > prevHigh and lastLow > prevLow
+            structure := "UPTREND"
+        else if lastHigh < prevHigh and lastLow < prevLow
+            structure := "DOWNTREND"
+    structure
+
+marketStructure = getMarketStructure()
+
+// ═══════════════════════════════════════════════════════════════
+// 📈 BOS (BREAK OF STRUCTURE) VA CHOCH (CHANGE OF CHARACTER)
+// ═══════════════════════════════════════════════════════════════
+
+// BOS aniqlash
+var float lastStructuralHigh = na
+var float lastStructuralLow = na
+var bool bosUp = false
+var bool bosDown = false
+var bool chochUp = false
+var bool chochDown = false
+
+if array.size(swingHighs) >= 1
+    lastStructuralHigh := array.get(swingHighs, array.size(swingHighs) - 1)
+
+if array.size(swingLows) >= 1
+    lastStructuralLow := array.get(swingLows, array.size(swingLows) - 1)
+
+// BOS UP (yuqoriga buzilish)
+bosUp := close > lastStructuralHigh and not na(lastStructuralHigh) and marketStructure == "UPTREND"
+
+// BOS DOWN (pastga buzilish)
+bosDown := close < lastStructuralLow and not na(lastStructuralLow) and marketStructure == "DOWNTREND"
+
+// CHoCH (Character Change)
+chochUp := close > lastStructuralHigh and not na(lastStructuralHigh) and marketStructure != "UPTREND"
+chochDown := close < lastStructuralLow and not na(lastStructuralLow) and marketStructure != "DOWNTREND"
+
+// BOS/CHoCH belgilarini chizish
+if bosUp and showSignals
+    label.new(bar_index, high, "BOS↑", color=color.green, style=label.style_label_up, size=size.small, textcolor=color.white)
+
+if bosDown and showSignals
+    label.new(bar_index, low, "BOS↓", color=color.red, style=label.style_label_down, size=size.small, textcolor=color.white)
+
+if chochUp and showSignals
+    label.new(bar_index, high, "CHoCH↑", color=color.blue, style=label.style_label_up, size=size.small, textcolor=color.white)
+
+if chochDown and showSignals
+    label.new(bar_index, low, "CHoCH↓", color=color.purple, style=label.style_label_down, size=size.small, textcolor=color.white)
+
+// ═══════════════════════════════════════════════════════════════
+// 📦 ORDER BLOCKS (OB)
+// ═══════════════════════════════════════════════════════════════
+
+var box[] bullishOBs = array.new<box>()
+var box[] bearishOBs = array.new<box>()
+
+// Bullish Order Block (BOS UP dan oldin oxirgi bearish sham)
+if bosUp or chochUp
+    // Oxirgi bearish shamni topish
+    lookback = 0
+    found = false
+    for i = 1 to 20
+        if close[i] < open[i] and not found
+            // Bullish OB yaratish
+            if showOB
+                obBox = box.new(
+                     left = bar_index - i,
+                     top = math.max(open[i], close[i]),
+                     right = bar_index + obExtend,
+                     bottom = math.min(open[i], close[i]),
+                     border_color = color.green,
+                     bgcolor = bullishOBColor,
+                     border_width = 1
+                 )
+                array.push(bullishOBs, obBox)
+                if array.size(bullishOBs) > 10
+                    oldBox = array.shift(bullishOBs)
+                    box.delete(oldBox)
+            found := true
+
+// Bearish Order Block (BOS DOWN dan oldin oxirgi bullish sham)
+if bosDown or chochDown
+    // Oxirgi bullish shamni topish
+    lookback = 0
+    found = false
+    for i = 1 to 20
+        if close[i] > open[i] and not found
+            // Bearish OB yaratish
+            if showOB
+                obBox = box.new(
+                     left = bar_index - i,
+                     top = math.max(open[i], close[i]),
+                     right = bar_index + obExtend,
+                     bottom = math.min(open[i], close[i]),
+                     border_color = color.red,
+                     bgcolor = bearishOBColor,
+                     border_width = 1
+                 )
+                array.push(bearishOBs, obBox)
+                if array.size(bearishOBs) > 10
+                    oldBox = array.shift(bearishOBs)
+                    box.delete(oldBox)
+            found := true
+
+// ═══════════════════════════════════════════════════════════════
+// 🌊 FAIR VALUE GAP (FVG)
+// ═══════════════════════════════════════════════════════════════
+
+var box[] bullishFVGs = array.new<box>()
+var box[] bearishFVGs = array.new<box>()
+
+// Bullish FVG (low[0] > high[2])
+isBullishFVG = low[1] > high[2]
+if isBullishFVG and showFVG
+    fvgBox = box.new(
+         left = bar_index - 2,
+         top = low[1],
+         right = bar_index + 20,
+         bottom = high[2],
+         border_color = color.blue,
+         bgcolor = fvgBullColor,
+         border_width = 1
+     )
+    array.push(bullishFVGs, fvgBox)
+    if array.size(bullishFVGs) > 20
+        oldBox = array.shift(bullishFVGs)
+        box.delete(oldBox)
+
+// Bearish FVG (high[0] < low[2])  
+isBearishFVG = high[1] < low[2]
+if isBearishFVG and showFVG
+    fvgBox = box.new(
+         left = bar_index - 2,
+         top = low[2],
+         right = bar_index + 20,
+         bottom = high[1],
+         border_color = color.orange,
+         bgcolor = fvgBearColor,
+         border_width = 1
+     )
+    array.push(bearishFVGs, fvgBox)
+    if array.size(bearishFVGs) > 20
+        oldBox = array.shift(bearishFVGs)
+        box.delete(oldBox)
+
+// ═══════════════════════════════════════════════════════════════
+// 💧 LIQUIDITY GRAB (STOP HUNT)
+// ═══════════════════════════════════════════════════════════════
+
+// Oxirgi swing high/low dan yuqori/past ketish
+highestSwing = array.size(swingHighs) > 0 ? array.get(swingHighs, array.size(swingHighs) - 1) : na
+lowestSwing = array.size(swingLows) > 0 ? array.get(swingLows, array.size(swingLows) - 1) : na
+
+// Liquidity Grab aniqlash
+liquidityGrabUp = not na(highestSwing) and close > highestSwing and close[1] <= highestSwing
+liquidityGrabDown = not na(lowestSwing) and close < lowestSwing and close[1] >= lowestSwing
+
+// Liquidity grab chizish
+if liquidityGrabUp and showLiquidity
+    line.new(bar_index - 1, highestSwing, bar_index, highestSwing, color=color.yellow, width=2, style=line.style_dashed)
+    label.new(bar_index, high, "LIQ↑", color=color.yellow, style=label.style_label_up, size=size.tiny)
+
+if liquidityGrabDown and showLiquidity
+    line.new(bar_index - 1, lowestSwing, bar_index, lowestSwing, color=color.yellow, width=2, style=line.style_dashed)
+    label.new(bar_index, low, "LIQ↓", color=color.yellow, style=label.style_label_down, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════
+// 🎯 PROFESSIONAL ENTRY SIGNALS
+// ═══════════════════════════════════════════════════════════════
+
+// Order Block zonasida narx tekshirish
+inBullishOB = false
+inBearishOB = false
+
+if array.size(bullishOBs) > 0
+    for i = 0 to array.size(bullishOBs) - 1
+        obBox = array.get(bullishOBs, i)
+        top = box.get_top(obBox)
+        bottom = box.get_bottom(obBox)
+        if low <= top and high >= bottom
+            inBullishOB := true
+
+if array.size(bearishOBs) > 0
+    for i = 0 to array.size(bearishOBs) - 1
+        obBox = array.get(bearishOBs, i)
+        top = box.get_top(obBox)
+        bottom = box.get_bottom(obBox)
+        if low <= top and high >= bottom
+            inBearishOB := true
+
+// FVG zonasida narx tekshirish  
+inBullishFVG = false
+inBearishFVG = false
+
+if array.size(bullishFVGs) > 0
+    for i = 0 to array.size(bullishFVGs) - 1
+        fvgBox = array.get(bullishFVGs, i)
+        top = box.get_top(fvgBox)
+        bottom = box.get_bottom(fvgBox)
+        if low <= top and high >= bottom
+            inBullishFVG := true
+
+if array.size(bearishFVGs) > 0
+    for i = 0 to array.size(bearishFVGs) - 1
+        fvgBox = array.get(bearishFVGs, i)
+        top = box.get_top(fvgBox)
+        bottom = box.get_bottom(fvgBox)
+        if low <= top and high >= bottom
+            inBearishFVG := true
+
+// PROFESSIONAL BUY SIGNAL
+buySignal = (chochUp or bosUp) and (inBullishOB or inBullishFVG) and close > open
+
+// PROFESSIONAL SELL SIGNAL  
+sellSignal = (chochDown or bosDown) and (inBearishOB or inBearishFVG) and close < open
+
+// Signallarni chizish
+if buySignal and showSignals
+    label.new(bar_index, low, "🔥BUY", color=color.lime, style=label.style_label_up, size=size.normal, textcolor=color.white)
+    // Stop Loss va Take Profit hisoblash
+    stopLoss = low - (high - low) * 0.5
+    takeProfit = high + (high - low) * riskReward
+    
+if sellSignal and showSignals  
+    label.new(bar_index, high, "🔥SELL", color=color.red, style=label.style_label_down, size=size.normal, textcolor=color.white)
+    // Stop Loss va Take Profit hisoblash
+    stopLoss = high + (high - low) * 0.5
+    takeProfit = low - (high - low) * riskReward
+
+// ═══════════════════════════════════════════════════════════════
+// 📊 TABLE - MARKET INFO DASHBOARD  
+// ═══════════════════════════════════════════════════════════════
+
+if barstate.islast
+    var table infoTable = table.new(position.top_right, 3, 6, bgcolor=color.new(color.black, 20), border_width=1)
+    
+    // Header
+    table.cell(infoTable, 0, 0, "SMC INFO", text_color=color.white, bgcolor=color.new(color.blue, 30))
+    table.cell(infoTable, 1, 0, "STATUS", text_color=color.white, bgcolor=color.new(color.blue, 30))
+    table.cell(infoTable, 2, 0, "COUNT", text_color=color.white, bgcolor=color.new(color.blue, 30))
+    
+    // Market Structure
+    structureColor = marketStructure == "UPTREND" ? color.green : marketStructure == "DOWNTREND" ? color.red : color.gray
+    table.cell(infoTable, 0, 1, "Market Structure", text_color=color.white)
+    table.cell(infoTable, 1, 1, marketStructure, text_color=color.white, bgcolor=color.new(structureColor, 70))
+    table.cell(infoTable, 2, 1, "-", text_color=color.white)
+    
+    // Order Blocks
+    table.cell(infoTable, 0, 2, "Bullish OBs", text_color=color.white)
+    table.cell(infoTable, 1, 2, inBullishOB ? "ACTIVE" : "NONE", text_color=color.white, bgcolor=inBullishOB ? color.new(color.green, 70) : color.new(color.gray, 70))
+    table.cell(infoTable, 2, 2, str.tostring(array.size(bullishOBs)), text_color=color.white)
+    
+    table.cell(infoTable, 0, 3, "Bearish OBs", text_color=color.white)
+    table.cell(infoTable, 1, 3, inBearishOB ? "ACTIVE" : "NONE", text_color=color.white, bgcolor=inBearishOB ? color.new(color.red, 70) : color.new(color.gray, 70))
+    table.cell(infoTable, 2, 3, str.tostring(array.size(bearishOBs)), text_color=color.white)
+    
+    // Fair Value Gaps
+    table.cell(infoTable, 0, 4, "Bullish FVGs", text_color=color.white)
+    table.cell(infoTable, 1, 4, inBullishFVG ? "ACTIVE" : "NONE", text_color=color.white, bgcolor=inBullishFVG ? color.new(color.blue, 70) : color.new(color.gray, 70))
+    table.cell(infoTable, 2, 4, str.tostring(array.size(bullishFVGs)), text_color=color.white)
+    
+    table.cell(infoTable, 0, 5, "Bearish FVGs", text_color=color.white)
+    table.cell(infoTable, 1, 5, inBearishFVG ? "ACTIVE" : "NONE", text_color=color.white, bgcolor=inBearishFVG ? color.new(color.orange, 70) : color.new(color.gray, 70))
+    table.cell(infoTable, 2, 5, str.tostring(array.size(bearishFVGs)), text_color=color.white)
+
+// ═══════════════════════════════════════════════════════════════
+// 🎨 PRICE ALERTS
+// ═══════════════════════════════════════════════════════════════
+
+// Alert shartlari
+alertcondition(buySignal, "SMC Buy Signal", "🔥 SMC Professional BUY Signal Generated!")
+alertcondition(sellSignal, "SMC Sell Signal", "🔥 SMC Professional SELL Signal Generated!")
+alertcondition(bosUp, "Break of Structure UP", "📈 BOS UP - Bullish Structure Break!")
+alertcondition(bosDown, "Break of Structure DOWN", "📉 BOS DOWN - Bearish Structure Break!")
+alertcondition(chochUp, "Change of Character UP", "🔄 CHoCH UP - Bullish Character Change!")
+alertcondition(chochDown, "Change of Character DOWN", "🔄 CHoCH DOWN - Bearish Character Change!")
+
+// ═══════════════════════════════════════════════════════════════
+// 📝 PLOT QILISH (IXTIYORIY)
+// ═══════════════════════════════════════════════════════════════
+
+// Swing nuqtalarni plot qilish (ixtiyoriy)
+// plot(isSwingHigh, "Swing High", color=color.green, linewidth=1, style=plot.style_circles)
+// plot(isSwingLow, "Swing Low", color=color.red, linewidth=1, style=plot.style_circles)
+
+// Signal plot (background rangini o'zgartirish)
+bgcolor(buySignal ? color.new(color.green, 95) : sellSignal ? color.new(color.red, 95) : na, title="Signal Background")
